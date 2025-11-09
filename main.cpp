@@ -3,7 +3,7 @@ using namespace std;
 
 const int MAX_ITER = 10000;
 const int TABU_SIZE = 15;
-const int CANDIDATE_LIST_SIZE = 100;  // Tamaño de la lista de candidatos
+const int CANDIDATE_LIST_SIZE = 200;  // Tamaño de la lista de candidatos
 
 struct Cell {
     int id;

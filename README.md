@@ -39,12 +39,22 @@ Minimizar la interferencia total:
 - Interferencia co-channel: Cuando dos celdas usan la misma frecuencia
 - Interferencia adjacent-channel: Cuando dos celdas usan frecuencias adyacentes
 
-### Algoritmo
-- **Búsqueda Tabú** con estrategia de Primera Mejora (First Improvement)
-- **Vecindario**: 1-opt (cambio de frecuencia de un solo TRX)
-- **Parámetros**:
-  - MAX_ITER: 10000 iteraciones
-  - TABU_SIZE: 15 (tamaño de la lista tabú)
+### Algoritmo: Tabu Search con Candidate List
+
+La implementación utiliza una **estrategia de Candidate List**, que combina:
+- **Generación aleatoria**: Se genera un subset de movimientos candidatos de forma aleatoria
+- **Mejor Mejora**: Se evalúan TODOS los candidatos y se selecciona el mejor
+- **Control de complejidad**: Solo se evalúan CANDIDATE_LIST_SIZE movimientos por iteración
+
+**Ventajas sobre Primera Mejora:**
+- Mejor calidad de soluciones (explora más antes de decidir)
+- Complejidad controlada (no evalúa todo el vecindario)
+- Balance entre intensificación y diversificación
+
+**Parámetros:**
+- MAX_ITER: 10000 iteraciones
+- TABU_SIZE: 15 (tenure de la lista tabú)
+- CANDIDATE_LIST_SIZE: 200 (candidatos evaluados por iteración)
 
 ## Instancias Soportadas
 
