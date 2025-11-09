@@ -431,68 +431,67 @@ public:
 
 private:
     Solution buscar_vecino(const Solution& s, int iter) {
-        // Generar lista de todos los movimientos factibles
-        vector<tuple<int, size_t, int>> movimientos;
-        for (auto& [cid, freqs] : s.asignacion) {
-            for (size_t idx = 0; idx < freqs.size(); ++idx) {
-                for (int new_f : problema.domains[cid]) {
-                    if (new_f == freqs[idx]) continue;
-                    if (!es_factible_trx(cid, idx, new_f, s.asignacion)) continue;
-                    movimientos.push_back({cid, idx, new_f});
-                }
-            }
-        }
-        
-        // Mezclar aleatoriamente
         random_device rd;
         mt19937 gen(rd());
-        shuffle(movimientos.begin(), movimientos.end(), gen);
         
-        // Primera Mejora: aceptar primer vecino que mejora
-        for (auto [cid, idx, new_f] : movimientos) {
-            int old_f = s.asignacion.at(cid)[idx];
-
-            Solution v = s;
-            v.asignacion[cid][idx] = new_f;
-            v.calcular_costo();
-
-            auto tm = make_tuple(cid, idx, old_f);
-            bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
-            
-            // Acepta si NO es tabú Y mejora
-            if (!tabu && v.costo < s.costo) {
-                lista_tabu[tm] = iter + TABU_SIZE;
-                return v;
-            }
+        // Generar orden aleatorio de celdas
+        vector<int> cell_ids;
+        for (auto& [cid, freqs] : s.asignacion) {
+            cell_ids.push_back(cid);
         }
+        shuffle(cell_ids.begin(), cell_ids.end(), gen);
         
-        // Si no hay mejoras, aceptar el mejor vecino no-tabú (aunque empeore)
         Solution mejor_vecino;
         double mejor_costo = 1e9;
         tuple<int, size_t, int> mejor_mov;
         bool encontrado = false;
         
-        for (auto [cid, idx, new_f] : movimientos) {
-            int old_f = s.asignacion.at(cid)[idx];
-
-            Solution v = s;
-            v.asignacion[cid][idx] = new_f;
-            v.calcular_costo();
-
-            auto tm = make_tuple(cid, idx, old_f);
-            bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
+        // Explorar en orden aleatorio
+        for (int cid : cell_ids) {
+            // Orden aleatorio de TRXs
+            vector<size_t> trx_indices;
+            for (size_t i = 0; i < s.asignacion.at(cid).size(); ++i) {
+                trx_indices.push_back(i);
+            }
+            shuffle(trx_indices.begin(), trx_indices.end(), gen);
             
-            // NUNCA acepta movimientos tabú
-            if (!tabu) {
-                if (v.costo < mejor_costo) {
-                    mejor_vecino = v;
-                    mejor_costo = v.costo;
-                    mejor_mov = tm;
-                    encontrado = true;
+            for (size_t idx : trx_indices) {
+                // Orden aleatorio de frecuencias
+                vector<int> freqs = problema.domains[cid];
+                shuffle(freqs.begin(), freqs.end(), gen);
+                
+                for (int new_f : freqs) {
+                    int old_f = s.asignacion.at(cid)[idx];
+                    if (new_f == old_f) continue;
+                    if (!es_factible_trx(cid, idx, new_f, s.asignacion)) continue;
+                    
+                    Solution v = s;
+                    v.asignacion[cid][idx] = new_f;
+                    v.calcular_costo();
+                    
+                    auto tm = make_tuple(cid, idx, old_f);
+                    bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
+                    
+                    if (tabu) continue;
+                    
+                    // Primera Mejora: si mejora, aceptar inmediatamente
+                    if (v.costo < s.costo) {
+                        lista_tabu[tm] = iter + TABU_SIZE;
+                        return v;
+                    }
+                    
+                    // Si no mejora, guardar el mejor (para aceptar empeoramiento)
+                    if (v.costo < mejor_costo) {
+                        mejor_vecino = v;
+                        mejor_costo = v.costo;
+                        mejor_mov = tm;
+                        encontrado = true;
+                    }
                 }
             }
         }
         
+        // Si no encontró mejora, retornar el mejor empeoramiento
         if (encontrado) {
             lista_tabu[mejor_mov] = iter + TABU_SIZE;
             return mejor_vecino;
