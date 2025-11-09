@@ -1,7 +1,7 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-const int MAX_ITER = 50000;
+const int MAX_ITER = 10000;
 const int TABU_SIZE = 15;
 
 struct Cell {
@@ -9,6 +9,7 @@ struct Cell {
     string site;
     int demand;
     set<int> lbc; // Frecuencias bloqueadas localmente
+    int tokens_leidos = 0;
 };
 
 struct Interference {
@@ -46,15 +47,17 @@ public:
             if (line.empty()) continue;
 
             if (line.find("GENERAL_INFORMATION") != string::npos) sec = "GEN";
-            else if (line.find("CELLS") != string::npos) sec = "CELLS";
             else if (line.find("CELL_RELATIONS") != string::npos) sec = "RELS";
-            else if (line.find("}") != string::npos) {
-                curr_cell = -1;
-                curr_rel = {-1, -1};
-            }
+            else if (line.find("CELLS") != string::npos) sec = "CELLS";
             else if (sec == "GEN") parse_gen(line);
             else if (sec == "CELLS") parse_cells(line, curr_cell);
             else if (sec == "RELS") parse_rels(line, curr_rel);
+            
+            // Resetear contexto DESPUES de procesar la linea
+            if (line.find("}") != string::npos && line.find("{") == string::npos) {
+                curr_cell = -1;
+                curr_rel = {-1, -1};
+            }
         }
         calc_domains();
         return true;
@@ -86,6 +89,7 @@ private:
                 cid = id;
                 cells[cid].id = id;
                 cells[cid].demand = 0;
+                cells[cid].tokens_leidos = 0;
             }
         } else {
             string tok;
@@ -96,29 +100,32 @@ private:
                 int f;
                 while (ss >> f) cells[cid].lbc.insert(f);
             } else if (tok == "LOC") {
-                // ignorar
+                
+            } else if (tok.find('}') != string::npos) {
+                cid = -1;
             } else {
-                vector<string> toks;
-                toks.push_back(tok);
-                while (ss >> tok) {
-                    if (tok == "LBC") {
-                        int f;
-                        while (ss >> f) cells[cid].lbc.insert(f);
-                        break;
-                    }
-                    toks.push_back(tok);
+                vector<string> clean_toks;
+                
+                string ct = tok;
+                if (!ct.empty() && ct.back() == ';') ct.pop_back();
+                if (!ct.empty()) clean_toks.push_back(ct);
+                
+                while (ss >> tok && tok != "LBC" && tok != "LOC" && tok.find('}') == string::npos) {
+                    ct = tok;
+                    if (!ct.empty() && ct.back() == ';') ct.pop_back();
+                    if (!ct.empty()) clean_toks.push_back(ct);
                 }
                 
-                for (const auto& t : toks) {
-                    string ct = t;
-                    if (!ct.empty() && ct.back() == ';') ct.pop_back();
-                    if (ct.empty()) continue;
-                    
-                    bool isnum = all_of(ct.begin(), ct.end(), ::isdigit);
-                    if (isnum) {
-                        cells[cid].demand = stoi(ct);
-                    } else {
-                        if (cells[cid].site.empty()) cells[cid].site = ct;
+                for (const string& t : clean_toks) {
+                    if (cells[cid].tokens_leidos == 0) {
+                        cells[cid].site = t;
+                        cells[cid].tokens_leidos++;
+                    } else if (cells[cid].tokens_leidos == 1) {
+                        cells[cid].tokens_leidos++;
+                    } else if (cells[cid].tokens_leidos == 2) {
+                        cells[cid].demand = stoi(t);
+                        cells[cid].tokens_leidos++;
+                        break;
                     }
                 }
             }
@@ -127,23 +134,43 @@ private:
 
     void parse_rels(const string& line, pair<int, int>& cp) {
         stringstream ss(line);
-        if (cp.first == -1) {
-            int c1, c2;
-            char c;
-            ss >> c1 >> c2 >> c;
-            if (c == '{') cp = {c1, c2};
-        } else {
-            string key;
-            ss >> key;
-            if (key == "DA") { 
-                double v1, v2 = 0.0;
-                ss >> v1;
-                if (ss >> v2) {
+        int c1, c2;
+        char c;
+        if (ss >> c1 >> c2 >> c) {
+            if (c == '{') {
+                cp = {c1, c2};
+            }
+        }
+        
+        if (cp.first != -1) {
+            stringstream ss2(line);
+            string token;
+            while (ss2 >> token) {
+                if (token == "DA") {
+                    double v1 = 0.0, v2 = 0.0;
+                    ss2 >> v1;
+                    string next;
+                    if (ss2 >> next) {
+                        // Limpiar el ';' si existe
+                        if (!next.empty() && next.back() == ';') {
+                            next.pop_back();
+                        }
+                        // Intentar convertir
+                        try {
+                            if (!next.empty() && next.find_first_not_of("0123456789.-") == string::npos) {
+                                v2 = stod(next);
+                            }
+                        } catch (...) {
+                            v2 = 0.0;
+                        }
+                    }
                     relations[cp].v_co = v1;
                     relations[cp].v_adj = v2;
-                } else {
-                    relations[cp].v_co = v1;
-                    relations[cp].v_adj = 0.0;
+                    break;
+                }
+                if (token.find('}') != string::npos) {
+                    cp = {-1, -1};
+                    break;
                 }
             }
         }
@@ -163,9 +190,6 @@ private:
                 if (cell.lbc.find(f) == cell.lbc.end()) {
                     domains[id].push_back(f);
                 }
-            }
-            if (domains[id].size() < (size_t)cell.demand) {
-                cerr << "Celda " << id << " no tiene suficientes frecuencias" << endl;
             }
         }
     }
@@ -228,31 +252,41 @@ public:
         mt19937 gen(rd());
         // Garantizar asignacion inicial factible segun restricciones duras
         for (auto& [id, cell] : prob->cells) {
+            auto& dom = prob->domains[id];
+            if (dom.size() < (size_t)cell.demand) {
+                cerr << "ERROR: Dominio insuficiente para celda " << id << endl;
+                exit(1);
+            }
+        }
+        
+        for (auto& [id, cell] : prob->cells) {
             asignacion[id].clear();
-            auto& dom = prob->domains[id]; // Dominio de la celda valido
+            auto& dom = prob->domains[id];
             
-            // Asignar frecuencias segun demanda
             for (int k = 0; k < cell.demand; ++k) {
-                vector<int> factibles; // Frecuencias factibles segun restriccion co-site
+                vector<int> factibles;
                 for (int f : dom) {
                     if (puede_agregar(id, f)) factibles.push_back(f);
                 }
                 
                 if (factibles.empty()) {
-                    cerr << "No hay frecuencias factibles para celda " << id << endl;
-                    continue;
+                    factibles = dom;
+                    if (factibles.empty()) {
+                        cerr << "ERROR: Dominio vacio para celda " << id << endl;
+                        exit(1);
+                    }
                 }
                 
                 uniform_int_distribution<> dis(0, factibles.size() - 1);
                 asignacion[id].push_back(factibles[dis(gen)]);
             }
         }
+        
         calcular_costo();
     }
 
     void calcular_costo() {
         costo = 0.0;
-
         for (auto& [par, inf] : prob->relations) {
             int i = par.first;
             int j = par.second;
@@ -294,7 +328,9 @@ public:
         int total_trxs = 0;
         for (auto& [id, c] : problema.cells) total_trxs += c.demand;
         cout << "TRXs: " << total_trxs << endl;
+        cout << "Relaciones DA: " << problema.relations.size() << endl;
         log << "TRXs: " << total_trxs << endl;
+        log << "Relaciones DA: " << problema.relations.size() << endl;
         log << "Espectro: [" << problema.fmin << ", " << problema.fmax << "]" << endl;
         log << "CO_SITE_SEPARATION: " << problema.co_site_sep << endl;
         log << "MAX_ITER: " << MAX_ITER << endl;
@@ -325,6 +361,13 @@ public:
                          to_string(actual.costo) + ", mejor = " + to_string(mejor.costo);
             cout << line << endl;
             log << line << endl;
+            
+            // Terminar si se encuentra solución óptima (costo 0)
+            if (mejor.costo == 0.0) {
+                log << "Solucion optima encontrada (costo = 0) en iter " << (it + 1) << endl;
+                cout << "Solucion optima encontrada (costo = 0)" << endl;
+                break;
+            }
         }
 
         cout << "\nCosto final: " << mejor.costo << endl;
@@ -340,6 +383,32 @@ public:
         
         log.close();
         cout << "Log guardado en: " << log_file << endl;
+        
+        // Guardar solucion final
+        guardar_solucion(archivo);
+    }
+    
+    void guardar_solucion(const string& archivo) {
+        string sol_file = archivo.substr(0, archivo.find('.')) + "_solution.txt";
+        ofstream out(sol_file);
+        
+        out << "=== SOLUCION FAP ===" << endl << endl;
+        out << "Instancia: " << archivo << endl;
+        out << "Costo total: " << mejor.costo << endl;
+        out << "Factible: " << (mejor.es_factible() ? "SI" : "NO") << endl << endl;
+        
+        out << "Asignacion de frecuencias:" << endl;
+        out << "Celda\tTRX\tFrecuencia" << endl;
+        out << "--------------------------" << endl;
+        
+        for (auto& [id, freqs] : mejor.asignacion) {
+            for (size_t i = 0; i < freqs.size(); ++i) {
+                out << id << "\t" << (i + 1) << "\t" << freqs[i] << endl;
+            }
+        }
+        
+        out.close();
+        cout << "Solucion guardada en: " << sol_file << endl;
     }
 
     bool es_factible_trx(int cell_id, size_t trx_idx, int freq, const map<int, vector<int>>& asig) {
@@ -362,26 +431,71 @@ public:
 
 private:
     Solution buscar_vecino(const Solution& s, int iter) {
+        // Generar lista de todos los movimientos factibles
+        vector<tuple<int, size_t, int>> movimientos;
         for (auto& [cid, freqs] : s.asignacion) {
             for (size_t idx = 0; idx < freqs.size(); ++idx) {
-                int old_f = freqs[idx];
-                
                 for (int new_f : problema.domains[cid]) {
-                    if (new_f == old_f) continue;
+                    if (new_f == freqs[idx]) continue;
                     if (!es_factible_trx(cid, idx, new_f, s.asignacion)) continue;
-
-                    Solution v = s;
-                    v.asignacion[cid][idx] = new_f;
-                    v.calcular_costo();
-
-                    auto tm = make_tuple(cid, idx, old_f);
-                    bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
-                    if (!tabu && v.costo < s.costo) {
-                        lista_tabu[tm] = iter + TABU_SIZE;
-                        return v;
-                    }
+                    movimientos.push_back({cid, idx, new_f});
                 }
             }
+        }
+        
+        // Mezclar aleatoriamente
+        random_device rd;
+        mt19937 gen(rd());
+        shuffle(movimientos.begin(), movimientos.end(), gen);
+        
+        // Primera Mejora: aceptar primer vecino que mejora
+        for (auto [cid, idx, new_f] : movimientos) {
+            int old_f = s.asignacion.at(cid)[idx];
+
+            Solution v = s;
+            v.asignacion[cid][idx] = new_f;
+            v.calcular_costo();
+
+            auto tm = make_tuple(cid, idx, old_f);
+            bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
+            
+            // Acepta si NO es tabú Y mejora
+            if (!tabu && v.costo < s.costo) {
+                lista_tabu[tm] = iter + TABU_SIZE;
+                return v;
+            }
+        }
+        
+        // Si no hay mejoras, aceptar el mejor vecino no-tabú (aunque empeore)
+        Solution mejor_vecino;
+        double mejor_costo = 1e9;
+        tuple<int, size_t, int> mejor_mov;
+        bool encontrado = false;
+        
+        for (auto [cid, idx, new_f] : movimientos) {
+            int old_f = s.asignacion.at(cid)[idx];
+
+            Solution v = s;
+            v.asignacion[cid][idx] = new_f;
+            v.calcular_costo();
+
+            auto tm = make_tuple(cid, idx, old_f);
+            bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
+            
+            // NUNCA acepta movimientos tabú
+            if (!tabu) {
+                if (v.costo < mejor_costo) {
+                    mejor_vecino = v;
+                    mejor_costo = v.costo;
+                    mejor_mov = tm;
+                    encontrado = true;
+                }
+            }
+        }
+        
+        if (encontrado) {
+            lista_tabu[mejor_mov] = iter + TABU_SIZE;
+            return mejor_vecino;
         }
         
         Solution vacia;
