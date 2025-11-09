@@ -282,21 +282,38 @@ public:
     void ejecutar(const string& archivo) {
         if (!problema.load(archivo)) return;
 
+        string log_file = archivo.substr(0, archivo.find('.')) + "_log.txt";
+        ofstream log(log_file);
+        
         cout << "Instancia: " << archivo << endl;
         cout << "Celdas: " << problema.cells.size() << endl;
+        
+        log << "Instancia: " << archivo << endl;
+        log << "Celdas: " << problema.cells.size() << endl;
         
         int total_trxs = 0;
         for (auto& [id, c] : problema.cells) total_trxs += c.demand;
         cout << "TRXs: " << total_trxs << endl;
+        log << "TRXs: " << total_trxs << endl;
+        log << "Espectro: [" << problema.fmin << ", " << problema.fmax << "]" << endl;
+        log << "CO_SITE_SEPARATION: " << problema.co_site_sep << endl;
+        log << "MAX_ITER: " << MAX_ITER << endl;
+        log << "TABU_SIZE: " << TABU_SIZE << endl;
+        log << endl;
+        
         Solution actual(&problema);
         actual.generar_inicial();
         mejor = actual;
 
         cout << "Costo inicial: " << mejor.costo << endl;
+        log << "Costo inicial: " << mejor.costo << endl << endl;
 
         for (int it = 0; it < MAX_ITER; ++it) {
             Solution vecino = buscar_vecino(actual, it);
-            if (vecino.prob == nullptr) break;
+            if (vecino.prob == nullptr) {
+                log << "No hay mas vecinos factibles en iter " << (it + 1) << endl;
+                break;
+            }
 
             actual = vecino;
 
@@ -304,17 +321,25 @@ public:
                 mejor = actual;
             }
             
-            cout << "Iter " << (it + 1) << ": actual = " << actual.costo 
-                 << ", mejor = " << mejor.costo << endl;
+            string line = "Iter " + to_string(it + 1) + ": actual = " + 
+                         to_string(actual.costo) + ", mejor = " + to_string(mejor.costo);
+            cout << line << endl;
+            log << line << endl;
         }
 
         cout << "\nCosto final: " << mejor.costo << endl;
+        log << endl << "Costo final: " << mejor.costo << endl;
         
         if (mejor.es_factible()) {
             cout << "Solucion factible" << endl;
+            log << "Solucion factible" << endl;
         } else {
             cout << "Solucion infactible" << endl;
+            log << "Solucion infactible" << endl;
         }
+        
+        log.close();
+        cout << "Log guardado en: " << log_file << endl;
     }
 
     bool es_factible_trx(int cell_id, size_t trx_idx, int freq, const map<int, vector<int>>& asig) {
