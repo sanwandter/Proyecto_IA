@@ -3,6 +3,7 @@ using namespace std;
 
 const int MAX_ITER = 10000;
 const int TABU_SIZE = 15;
+const int CANDIDATE_LIST_SIZE = 100;  // Tamaño de la lista de candidatos
 
 struct Cell {
     int id;
@@ -345,7 +346,8 @@ public:
         log << "Costo inicial: " << mejor.costo << endl << endl;
 
         for (int it = 0; it < MAX_ITER; ++it) {
-            Solution vecino = buscar_vecino(actual, it);
+            Solution vecino = buscar_vecino_con_candidate_list(actual, it);
+            
             if (vecino.prob == nullptr) {
                 log << "No hay mas vecinos factibles en iter " << (it + 1) << endl;
                 break;
@@ -430,74 +432,100 @@ public:
     }
 
 private:
-    Solution buscar_vecino(const Solution& s, int iter) {
+    // Generar movimientos candidatos aleatorios
+    vector<tuple<int, size_t, int, int>> generar_candidatos(const Solution& s, int num_candidatos) {
         random_device rd;
         mt19937 gen(rd());
         
-        // Generar orden aleatorio de celdas
+        vector<tuple<int, size_t, int, int>> candidatos;  // (cell_id, trx_idx, old_f, new_f)
+        
+        // Crear lista de todas las celdas
         vector<int> cell_ids;
         for (auto& [cid, freqs] : s.asignacion) {
             cell_ids.push_back(cid);
         }
-        shuffle(cell_ids.begin(), cell_ids.end(), gen);
         
+        // Generar candidatos aleatorios
+        uniform_int_distribution<> cell_dist(0, cell_ids.size() - 1);
+        
+        int intentos = 0;
+        int max_intentos = num_candidatos * 5;  // Intentar hasta 5x para encontrar factibles
+        
+        while (candidatos.size() < (size_t)num_candidatos && intentos < max_intentos) {
+            intentos++;
+            
+            // Seleccionar celda aleatoria
+            int cid = cell_ids[cell_dist(gen)];
+            
+            // Seleccionar TRX aleatorio de esa celda
+            if (s.asignacion.at(cid).empty()) continue;
+            uniform_int_distribution<> trx_dist(0, s.asignacion.at(cid).size() - 1);
+            size_t trx_idx = trx_dist(gen);
+            
+            // Seleccionar frecuencia aleatoria del dominio
+            auto& domain = problema.domains[cid];
+            if (domain.empty()) continue;
+            uniform_int_distribution<> freq_dist(0, domain.size() - 1);
+            int new_f = domain[freq_dist(gen)];
+            
+            int old_f = s.asignacion.at(cid)[trx_idx];
+            
+            // Validar movimiento
+            if (new_f == old_f) continue;
+            if (!es_factible_trx(cid, trx_idx, new_f, s.asignacion)) continue;
+            
+            // Evitar duplicados
+            auto mov = make_tuple(cid, trx_idx, old_f, new_f);
+            if (find(candidatos.begin(), candidatos.end(), mov) != candidatos.end()) continue;
+            
+            candidatos.push_back(mov);
+        }
+        
+        return candidatos;
+    }
+    
+    Solution buscar_vecino_con_candidate_list(const Solution& s, int iter) {
+        random_device rd;
+        mt19937 gen(rd());
+        
+        // FASE 1: Generar lista de candidatos
+        auto candidatos = generar_candidatos(s, CANDIDATE_LIST_SIZE);
+        
+        if (candidatos.empty()) {
+            Solution vacia;
+            return vacia;
+        }
+        
+        // FASE 2: Evaluar todos los candidatos y elegir el mejor
         Solution mejor_vecino;
         double mejor_costo = 1e9;
-        tuple<int, size_t, int> mejor_mov;
+        tuple<int, size_t, int> mejor_mov_inverso;
         bool encontrado = false;
         
-        // Explorar en orden aleatorio
-        for (int cid : cell_ids) {
-            // Orden aleatorio de TRXs
-            vector<size_t> trx_indices;
-            for (size_t i = 0; i < s.asignacion.at(cid).size(); ++i) {
-                trx_indices.push_back(i);
-            }
-            shuffle(trx_indices.begin(), trx_indices.end(), gen);
+        for (auto& [cid, trx_idx, old_f, new_f] : candidatos) {
+            // Verificar si está tabú
+            auto tm = make_tuple(cid, trx_idx, new_f);
+            bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
             
-            for (size_t idx : trx_indices) {
-                // Orden aleatorio de frecuencias
-                vector<int> freqs = problema.domains[cid];
-                shuffle(freqs.begin(), freqs.end(), gen);
-                
-                for (int new_f : freqs) {
-                    int old_f = s.asignacion.at(cid)[idx];
-                    if (new_f == old_f) continue;
-                    if (!es_factible_trx(cid, idx, new_f, s.asignacion)) continue;
-                    
-                    // Verificar si el movimiento está tabú
-                    // Tabú = (celda, trx, freq_destino) para prohibir "volver a freq_destino"
-                    auto tm = make_tuple(cid, idx, new_f);
-                    bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
-                    
-                    if (tabu) continue;
-                    
-                    Solution v = s;
-                    v.asignacion[cid][idx] = new_f;
-                    v.calcular_costo();
-                    
-                    // Primera Mejora: si mejora, aceptar inmediatamente
-                    if (v.costo < s.costo) {
-                        // Marcar movimiento inverso como tabú: prohibir volver a old_f
-                        auto mov_inverso = make_tuple(cid, idx, old_f);
-                        lista_tabu[mov_inverso] = iter + TABU_SIZE;
-                        return v;
-                    }
-                    
-                    // Si no mejora, guardar el mejor (para aceptar empeoramiento)
-                    if (v.costo < mejor_costo) {
-                        mejor_vecino = v;
-                        mejor_costo = v.costo;
-                        mejor_mov = make_tuple(cid, idx, old_f);  // Guardar movimiento inverso
-                        encontrado = true;
-                    }
-                }
+            if (tabu) continue;
+            
+            // Evaluar vecino
+            Solution v = s;
+            v.asignacion[cid][trx_idx] = new_f;
+            v.calcular_costo();
+            
+            // Guardar el mejor (mejora o empeoramiento)
+            if (v.costo < mejor_costo) {
+                mejor_vecino = v;
+                mejor_costo = v.costo;
+                mejor_mov_inverso = make_tuple(cid, trx_idx, old_f);
+                encontrado = true;
             }
         }
         
-        // Si no encontró mejora, retornar el mejor empeoramiento
+        // FASE 3: Aceptar el mejor candidato
         if (encontrado) {
-            lista_tabu[mejor_mov] = iter + TABU_SIZE;
+            lista_tabu[mejor_mov_inverso] = iter + TABU_SIZE;
             return mejor_vecino;
         }
         
