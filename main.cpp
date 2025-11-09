@@ -465,18 +465,22 @@ private:
                     if (new_f == old_f) continue;
                     if (!es_factible_trx(cid, idx, new_f, s.asignacion)) continue;
                     
-                    Solution v = s;
-                    v.asignacion[cid][idx] = new_f;
-                    v.calcular_costo();
-                    
-                    auto tm = make_tuple(cid, idx, old_f);
+                    // Verificar si el movimiento está tabú
+                    // Tabú = (celda, trx, freq_destino) para prohibir "volver a freq_destino"
+                    auto tm = make_tuple(cid, idx, new_f);
                     bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
                     
                     if (tabu) continue;
                     
+                    Solution v = s;
+                    v.asignacion[cid][idx] = new_f;
+                    v.calcular_costo();
+                    
                     // Primera Mejora: si mejora, aceptar inmediatamente
                     if (v.costo < s.costo) {
-                        lista_tabu[tm] = iter + TABU_SIZE;
+                        // Marcar movimiento inverso como tabú: prohibir volver a old_f
+                        auto mov_inverso = make_tuple(cid, idx, old_f);
+                        lista_tabu[mov_inverso] = iter + TABU_SIZE;
                         return v;
                     }
                     
@@ -484,7 +488,7 @@ private:
                     if (v.costo < mejor_costo) {
                         mejor_vecino = v;
                         mejor_costo = v.costo;
-                        mejor_mov = tm;
+                        mejor_mov = make_tuple(cid, idx, old_f);  // Guardar movimiento inverso
                         encontrado = true;
                     }
                 }
