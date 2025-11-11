@@ -12,19 +12,34 @@ Implementación de Búsqueda Tabú para resolver el Problema de Asignación de F
 
 ## Compilación
 
+### Opción 1: Usando Makefile
 ```bash
-g++ -std=c++17 -O2 -o fap_solver main.cpp
+make
 ```
 
 ## Ejecución
 
+### Sintaxis
 ```bash
 ./fap_solver <archivo.scen>
 ```
 
-Ejemplo:
+### Ejemplos
 ```bash
+# Instancia pequeña (rápida)
 ./fap_solver Tiny.scen
+
+# Instancia mediana
+./fap_solver Swisscom.scen
+
+# Instancia grande
+./fap_solver siemens1.scen
+```
+
+### Limpiar archivos compilados
+```bash
+make clean          # Solo elimina el ejecutable
+make cleanall       # Elimina ejecutable + logs + soluciones
 ```
 
 ## Características

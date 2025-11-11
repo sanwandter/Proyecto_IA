@@ -1,33 +1,44 @@
 #include <bits/stdc++.h>
+#include <chrono>
 using namespace std;
+using namespace std::chrono;
 
-const int MAX_ITER = 10000;
-const int TABU_SIZE = 15;
-const int CANDIDATE_LIST_SIZE = 200;  // Tamaño de la lista de candidatos
+const int MAX_ITER = 10000;              // Número máximo de iteraciones
+const int TABU_SIZE = 15;                // Tenure: iteraciones que un movimiento permanece tabú
+const int CANDIDATE_LIST_SIZE = 200;     // Número de candidatos aleatorios evaluados por iteración
+
+// Función hash simple para tuple<int, int, int> para usar en unordered_map
+struct TupleHash {
+    size_t operator()(const tuple<int, int, int>& t) const {
+        return get<0>(t) * 1000000 + get<1>(t) * 1000 + get<2>(t);
+    }
+};
 
 struct Cell {
-    int id;
-    string site;
-    int demand;
-    set<int> lbc; // Frecuencias bloqueadas localmente
-    int tokens_leidos = 0;
+    int id;                    // Identificador único de la celda
+    string site;               // Sitio al que pertenece (para restricción co-site)
+    int demand;                // Número de TRXs (transmisores) que necesita
+    set<int> lbc;              // Locally Blocked Channels: frecuencias no permitidas
+    int tokens_leidos = 0;     // Control interno para parseo
 };
 
 struct Interference {
-    double v_co = 0.0;
-    double v_adj = 0.0;
+    double v_co = 0.0;         // Penalización por interferencia co-channel (misma frecuencia)
+    double v_adj = 0.0;        // Penalización por interferencia adjacent-channel (frecuencias adyacentes)
 };
 
 class Problem {
 public:
-    int fmin, fmax;
-    int co_site_sep;
-    set<int> globally_blocked;
-    map<int, Cell> cells;
-    map<pair<int, int>, Interference> relations;
-    map<int, vector<int>> domains;
-    vector<int> freqs_disponibles;
+    int fmin, fmax;                                      // Rango del espectro disponible
+    int co_site_sep;                                     // Separación mínima entre frecuencias en el mismo sitio
+    set<int> globally_blocked;                           // Frecuencias bloqueadas globalmente
+    unordered_map<int, Cell> cells;                      // Diccionario de celdas por ID
+    map<pair<int, int>, Interference> relations;         // Relaciones de interferencia entre pares de celdas (map por pair)
+    unordered_map<int, vector<int>> domains;             // Dominio de frecuencias permitidas por celda
+    vector<int> freqs_disponibles;                       // Lista de frecuencias disponibles en el espectro
 
+
+    // Carga una instancia desde un archivo .scen (formato COST259)
     bool load(const string& filename) {
         ifstream file(filename);
         if (!file.is_open()) {
@@ -65,6 +76,10 @@ public:
     }
 
 private:
+    /**
+     * Parsea líneas de la sección GENERAL_INFORMATION
+     * Extrae: espectro, separación co-site, canales bloqueados globalmente
+     */
     void parse_gen(const string& line) {
         stringstream ss(line);
         string key;
@@ -80,6 +95,10 @@ private:
         }
     }
 
+    /**
+     * Parsea líneas de la sección CELLS
+     * Extrae: ID, sitio, demanda, canales bloqueados localmente
+     */
     void parse_cells(const string& line, int& cid) {
         stringstream ss(line);
         if (cid == -1) {
@@ -133,6 +152,10 @@ private:
         }
     }
 
+    /**
+     * Parsea líneas de la sección CELL_RELATIONS
+     * Extrae: relaciones DA (interferencia co-channel y adjacent-channel)
+     */
     void parse_rels(const string& line, pair<int, int>& cp) {
         stringstream ss(line);
         int c1, c2;
@@ -177,15 +200,19 @@ private:
         }
     }
 
+    /**
+     * Calcula el dominio de frecuencias permitidas para cada celda
+     * Dominio = frecuencias disponibles - bloqueadas localmente (LBC)
+     */
     void calc_domains() {
-        // armar lista de frecuencias disponibles
+        // Armar lista de frecuencias disponibles globalmente
         for (int f = fmin; f <= fmax; ++f) {
             if (globally_blocked.find(f) == globally_blocked.end()) {
                 freqs_disponibles.push_back(f);
             }
         }
 
-        // dominio por celda = freqs disponibles - LBC
+        // Calcular dominio por celda = frecuencias disponibles - LBC
         for (auto& [id, cell] : cells) {
             for (int f : freqs_disponibles) {
                 if (cell.lbc.find(f) == cell.lbc.end()) {
@@ -196,16 +223,25 @@ private:
     }
 };
 
-
+/**
+ * Representa una solución al problema FAP
+ * Contiene la asignación de frecuencias para cada TRX de cada celda
+ */
 class Solution {
 public:
-    map<int, vector<int>> asignacion;
-    Problem* prob;
-    double costo;
+    unordered_map<int, vector<int>> asignacion;    // cell_id -> [freq1, freq2, ..., freq_n]
+    Problem* prob;                                  // Puntero a la instancia del problema
+    double costo;                                   // Valor de la función objetivo (interferencias totales)
 
     Solution(Problem* p) : prob(p), costo(1e9) {}
     Solution() : prob(nullptr), costo(1e9) {}
 
+    /**
+     * Verifica si la solución cumple todas las restricciones duras:
+     * 1. Demanda exacta (cumplida por construcción)
+     * 2. Dominio válido (cumplida por construcción)
+     * 3. Separación co-site >= CO_SITE_SEPARATION
+     */
     bool es_factible() {
         for (auto& [id1, c1] : prob->cells) {
             auto& f1 = asignacion[id1];
@@ -231,6 +267,7 @@ public:
         return true;
     }
     
+    // Verifica si se puede agregar una frecuencia a una celda sin violar la restricción de separación co-site
     bool puede_agregar(int cell_id, int freq) {
         for (int f : asignacion[cell_id]) {
             if (abs(f - freq) < prob->co_site_sep) return false;
@@ -248,10 +285,18 @@ public:
         return true;
     }
 
+    /**
+     * Genera una solución inicial FACTIBLE aleatoria
+     * Garantiza que se cumplan todas las restricciones duras:
+     * - Asigna exactamente 'demand' frecuencias a cada celda
+     * - Solo usa frecuencias del dominio permitido
+     * - Respeta la separación co-site mínima
+     */
     void generar_inicial() {
         random_device rd;
         mt19937 gen(rd());
-        // Garantizar asignacion inicial factible segun restricciones duras
+        
+        // Verificar que cada celda tiene dominio suficiente
         for (auto& [id, cell] : prob->cells) {
             auto& dom = prob->domains[id];
             if (dom.size() < (size_t)cell.demand) {
@@ -286,6 +331,12 @@ public:
         calcular_costo();
     }
 
+    /**
+     * Calcula el costo total de la solución (función objetivo)
+     * Suma todas las interferencias co-channel y adjacent-channel
+     * según las relaciones DA definidas en el problema
+     * Objetivo: minimizar este valor (idealmente llegar a 0)
+     */
     void calcular_costo() {
         costo = 0.0;
         for (auto& [par, inf] : prob->relations) {
@@ -308,14 +359,31 @@ public:
 };
 
 
+/**
+ * Implementa el algoritmo de Búsqueda Tabú con estrategia Candidate List
+ * 
+ * Características principales:
+ * - Movimiento: 1-opt (cambiar frecuencia de un TRX)
+ * - Lista Tabú: Prohíbe movimientos inversos por TABU_SIZE iteraciones
+ * - Candidate List: Genera y evalúa CANDIDATE_LIST_SIZE candidatos aleatorios
+ * - Estrategia: Mejor Mejora sobre el subset de candidatos
+ */
 class TabuSearch {
 public:
-    Problem problema;
-    Solution mejor;
-    map<tuple<int, int, int>, int> lista_tabu;
+    Problem problema;                                                    // Instancia del problema
+    Solution mejor;                                                      // Mejor solución encontrada
+    unordered_map<tuple<int, int, int>, int, TupleHash> lista_tabu;     // (cell, trx, old_freq) -> iteración_prohibida
+    double tiempo_ejecucion;                                             // Tiempo de ejecución en segundos
 
+    /**
+     * Ejecuta el algoritmo de Búsqueda Tabú completo
+     * @param archivo Nombre del archivo .scen con la instancia
+     */
     void ejecutar(const string& archivo) {
         if (!problema.load(archivo)) return;
+
+        // Iniciar cronómetro
+        auto inicio = high_resolution_clock::now();
 
         string log_file = archivo.substr(0, archivo.find('.')) + "_log.txt";
         ofstream log(log_file);
@@ -372,8 +440,16 @@ public:
             }
         }
 
+        // Detener cronómetro
+        auto fin = high_resolution_clock::now();
+        duration<double> duracion = fin - inicio;
+        tiempo_ejecucion = duracion.count();
+
         cout << "\nCosto final: " << mejor.costo << endl;
+        cout << "Tiempo de ejecucion: " << tiempo_ejecucion << " segundos" << endl;
+        
         log << endl << "Costo final: " << mejor.costo << endl;
+        log << "Tiempo de ejecucion: " << tiempo_ejecucion << " segundos" << endl;
         
         if (mejor.es_factible()) {
             cout << "Solucion factible" << endl;
@@ -390,6 +466,10 @@ public:
         guardar_solucion(archivo);
     }
     
+    /**
+     * Guarda la solución final en un archivo de texto
+     * Formato: costo, tiempo, factibilidad, tabla de asignaciones
+     */
     void guardar_solucion(const string& archivo) {
         string sol_file = archivo.substr(0, archivo.find('.')) + "_solution.txt";
         ofstream out(sol_file);
@@ -397,6 +477,7 @@ public:
         out << "=== SOLUCION FAP ===" << endl << endl;
         out << "Instancia: " << archivo << endl;
         out << "Costo total: " << mejor.costo << endl;
+        out << "Tiempo de ejecucion: " << tiempo_ejecucion << " segundos" << endl;
         out << "Factible: " << (mejor.es_factible() ? "SI" : "NO") << endl << endl;
         
         out << "Asignacion de frecuencias:" << endl;
@@ -413,7 +494,14 @@ public:
         cout << "Solucion guardada en: " << sol_file << endl;
     }
 
-    bool es_factible_trx(int cell_id, size_t trx_idx, int freq, const map<int, vector<int>>& asig) {
+    /**
+     * Verifica si asignar una frecuencia a un TRX específico es factible
+     * Valida la restricción de separación co-site contra:
+     * 1. Otros TRXs de la misma celda
+     * 2. Todos los TRXs de otras celdas en el mismo sitio
+     * 
+     */
+    bool es_factible_trx(int cell_id, size_t trx_idx, int freq, const unordered_map<int, vector<int>>& asig) {
         for (size_t i = 0; i < asig.at(cell_id).size(); ++i) {
             if (i == trx_idx) continue;
             if (abs(asig.at(cell_id)[i] - freq) < problema.co_site_sep) return false;
@@ -432,7 +520,17 @@ public:
     }
 
 private:
-    // Generar movimientos candidatos aleatorios
+    /**
+     * Genera una lista de movimientos candidatos de forma aleatoria
+     * 
+     * Proceso:
+     * 1. Selecciona celda aleatoria
+     * 2. Selecciona TRX aleatorio de esa celda
+     * 3. Selecciona frecuencia aleatoria del dominio
+     * 4. Valida factibilidad (co-site)
+     * 5. Evita duplicados
+     * 
+     */
     vector<tuple<int, size_t, int, int>> generar_candidatos(const Solution& s, int num_candidatos) {
         random_device rd;
         mt19937 gen(rd());
