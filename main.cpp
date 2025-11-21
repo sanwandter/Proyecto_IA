@@ -356,6 +356,46 @@ public:
             }
         }
     }
+    
+    /**
+     * Calcula el DELTA de costo al cambiar una frecuencia
+     * Mucho más eficiente que recalcular todo el costo
+     * Solo evalúa las relaciones que involucran a cell_id
+     */
+    double calcular_delta_costo(int cell_id, int old_freq, int new_freq) const {
+        double delta = 0.0;
+        
+        // Buscar todas las relaciones donde participa cell_id
+        // Revisar tanto (cell_id, j) como (i, cell_id)
+        
+        // Caso 1: cell_id es el primero en la relación (i, j)
+        for (auto& [par, inf] : prob->relations) {
+            if (par.first != cell_id && par.second != cell_id) continue;
+            
+            int other_cell = (par.first == cell_id) ? par.second : par.first;
+            
+            if (asignacion.find(other_cell) == asignacion.end()) continue;
+            
+            // Para cada TRX de la otra celda
+            for (int other_freq : asignacion.at(other_cell)) {
+                // Restar interferencia con old_freq
+                if (old_freq == other_freq) {
+                    delta -= inf.v_co;
+                } else if (abs(old_freq - other_freq) == 1) {
+                    delta -= inf.v_adj;
+                }
+                
+                // Sumar interferencia con new_freq
+                if (new_freq == other_freq) {
+                    delta += inf.v_co;
+                } else if (abs(new_freq - other_freq) == 1) {
+                    delta += inf.v_adj;
+                }
+            }
+        }
+        
+        return delta;
+    }
 };
 
 
@@ -418,6 +458,7 @@ public:
             
             if (vecino.prob == nullptr) {
                 log << "No hay mas vecinos factibles en iter " << (it + 1) << endl;
+                cout << "No hay mas vecinos factibles en iter " << (it + 1) << endl;
                 break;
             }
 
@@ -595,38 +636,46 @@ private:
         }
         
         // FASE 2: Evaluar todos los candidatos y elegir el mejor
-        Solution mejor_vecino;
+        // Usando cálculo INCREMENTAL (delta) para eficiencia
+        int mejor_idx = -1;
         double mejor_costo = 1e9;
         tuple<int, size_t, int> mejor_mov_inverso;
-        bool encontrado = false;
         
-        for (auto& [cid, trx_idx, old_f, new_f] : candidatos) {
+        for (size_t idx = 0; idx < candidatos.size(); ++idx) {
+            auto& [cid, trx_idx, old_f, new_f] = candidatos[idx];
+            
             // Verificar si está tabú
             auto tm = make_tuple(cid, trx_idx, new_f);
             bool tabu = lista_tabu.count(tm) && lista_tabu[tm] > iter;
             
             if (tabu) continue;
             
-            // Evaluar vecino
-            Solution v = s;
-            v.asignacion[cid][trx_idx] = new_f;
-            v.calcular_costo();
+            // Calcular costo INCREMENTALMENTE (mucho más eficiente)
+            double delta = s.calcular_delta_costo(cid, old_f, new_f);
+            double nuevo_costo = s.costo + delta;
             
             // Guardar el mejor (mejora o empeoramiento)
-            if (v.costo < mejor_costo) {
-                mejor_vecino = v;
-                mejor_costo = v.costo;
+            if (nuevo_costo < mejor_costo) {
+                mejor_idx = idx;
+                mejor_costo = nuevo_costo;
                 mejor_mov_inverso = make_tuple(cid, trx_idx, old_f);
-                encontrado = true;
             }
         }
         
-        // FASE 3: Aceptar el mejor candidato
-        if (encontrado) {
+        // FASE 3: Aplicar el mejor movimiento encontrado
+        if (mejor_idx != -1) {
+            auto& [cid, trx_idx, old_f, new_f] = candidatos[mejor_idx];
+            
+            // Crear vecino con el movimiento
+            Solution mejor_vecino = s;
+            mejor_vecino.asignacion[cid][trx_idx] = new_f;
+            mejor_vecino.costo = mejor_costo;  // Usar costo ya calculado
+            
             lista_tabu[mejor_mov_inverso] = iter + TABU_SIZE;
             return mejor_vecino;
         }
         
+        // No se encontró ningún vecino válido
         Solution vacia;
         return vacia;
     }
