@@ -355,6 +355,11 @@ public:
                 }
             }
         }
+        
+        // Evitar errores de precisión de punto flotante y valores negativos
+        if (fabs(costo) < 1e-9) {
+            costo = 0.0;
+        }
     }
     
     /**
@@ -473,8 +478,8 @@ public:
             cout << line << endl;
             log << line << endl;
             
-            // Terminar si se encuentra solución óptima (costo 0)
-            if (mejor.costo == 0.0) {
+            // Terminar si se encuentra solución óptima (costo 0 o muy cercano a 0)
+            if (fabs(mejor.costo) < 1e-9) {
                 log << "Solucion optima encontrada (costo = 0) en iter " << (it + 1) << endl;
                 cout << "Solucion optima encontrada (costo = 0)" << endl;
                 break;
@@ -670,6 +675,11 @@ private:
             Solution mejor_vecino = s;
             mejor_vecino.asignacion[cid][trx_idx] = new_f;
             mejor_vecino.costo = mejor_costo;  // Usar costo ya calculado
+            
+            // Evitar errores de precisión de punto flotante
+            if (fabs(mejor_vecino.costo) < 1e-9) {
+                mejor_vecino.costo = 0.0;
+            }
             
             lista_tabu[mejor_mov_inverso] = iter + TABU_SIZE;
             return mejor_vecino;
